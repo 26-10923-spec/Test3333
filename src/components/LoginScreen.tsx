@@ -15,8 +15,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const [serverStatus, setServerStatus] = useState<{
+    databaseConfigured: boolean;
     databaseConnected: boolean;
     mode: string;
+    errorMessage?: string | null;
   } | null>(null);
 
   useEffect(() => {
@@ -24,8 +26,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       .then((res) => res.json())
       .then((data) => {
         setServerStatus({
+          databaseConfigured: data.databaseConfigured,
           databaseConnected: data.databaseConnected,
-          mode: data.mode
+          mode: data.mode,
+          errorMessage: data.errorMessage
         });
       })
       .catch((err) => {
@@ -228,6 +232,51 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               className="mb-4 p-3.5 bg-emerald-50 border-l-4 border-emerald-500 rounded-r text-emerald-700 text-xs font-medium"
             >
               {success}
+            </motion.div>
+          )}
+
+          {/* Diagnostic Database Status Info boxes */}
+          {serverStatus && serverStatus.databaseConfigured && !serverStatus.databaseConnected && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="mb-5 p-4 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs leading-relaxed font-sans flex flex-col gap-1.5 shadow-sm"
+            >
+              <div className="flex items-center gap-1.5 font-bold text-rose-800">
+                <Database className="w-4 h-4 text-rose-500 animate-pulse" />
+                <span>데이터베이스 연결 실패 (Vercel/Neon DB)</span>
+              </div>
+              <p>설정된 <code>DATABASE_URL</code>로 연결을 시도했으나 실패했습니다. 현재 백엔드 서비스가 정상적인 데이터베이스 연결을 수립하지 못하고 있습니다.</p>
+              {serverStatus.errorMessage && (
+                <div className="mt-1 p-2 bg-rose-100 rounded text-[11px] font-mono break-all text-rose-900 max-h-24 overflow-y-auto border border-rose-200">
+                  ⚠️ 오류 원인: {serverStatus.errorMessage}
+                </div>
+              )}
+              <div className="mt-1.5 pt-2 border-t border-rose-100 text-slate-500 text-[10px]">
+                💡 <strong>해결 방법:</strong>
+                <ul className="list-disc pl-4 mt-1 space-y-1">
+                  <li>오른쪽 위의 <strong>설정(톱니바퀴)</strong>이나 <strong>Secrets</strong> 패널에서 <code>DATABASE_URL</code>의 철자, 비밀번호, 호스트 주소를 확인해 주세요.</li>
+                  <li>SSL 설정(<code>?sslmode=require</code> 등)이 URL 끝에 포함되어 있는지 확인해 주세요.</li>
+                  <li>데이터베이스 측 방화벽(Vercel/Neon 등)에서 외부 접속 허용 여부를 체크해 주세요.</li>
+                </ul>
+              </div>
+            </motion.div>
+          )}
+
+          {serverStatus && !serverStatus.databaseConfigured && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="mb-5 p-4 bg-amber-50/70 border border-amber-200/50 rounded-lg text-amber-800 text-xs leading-relaxed font-sans flex flex-col gap-1 shadow-sm"
+            >
+              <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                <Database className="w-4 h-4 text-amber-500" />
+                <span>로컬 샌드박스 임시 저장 모드</span>
+              </div>
+              <p>현재 연결된 외부 데이터베이스가 없습니다. 회원 정보와 게임 진행 상황이 서버의 임시 메모리에만 유지됩니다. (새로고침 시 초기화될 수 있음)</p>
+              <p className="mt-1 text-[10px] text-slate-500">
+                💡 <strong>안내:</strong> 실시간 상시 영구 저장을 원하신다면 오른쪽 위 <strong>설정</strong> 메뉴에서 Vercel/Neon Postgres 등의 <code>DATABASE_URL</code>을 등록해 주세요.
+              </p>
             </motion.div>
           )}
 

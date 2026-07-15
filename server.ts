@@ -14,13 +14,15 @@ const mockDb: {
 };
 
 let pool: Pool | null = null;
+let isDbHealthy = false;
 
 function getDbPool(): Pool | null {
   if (pool) return pool;
 
   const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
-    console.warn('⚠️ DATABASE_URL is not defined. Using in-memory fallback database.');
+  // Fallback to memory if DATABASE_URL is not set or contains default placeholder
+  if (!dbUrl || dbUrl.includes('user:password@host/dbname')) {
+    console.warn('⚠️ DATABASE_URL is not defined or is placeholder. Using in-memory fallback database.');
     return null;
   }
 
@@ -28,12 +30,19 @@ function getDbPool(): Pool | null {
     pool = new Pool({
       connectionString: dbUrl,
       ssl: {
-        rejectUnauthorized: false // Safe default for serverless connections (e.g. Neon)
-      }
+        rejectUnauthorized: false // Safe default for serverless connections (e.g. Neon/Vercel)
+      },
+      connectionTimeoutMillis: 5000, // 5 second connection timeout
     });
+
+    pool.on('error', (err) => {
+      console.error('⚠️ Unexpected error on idle database client:', err.message);
+      isDbHealthy = false;
+    });
+
     return pool;
-  } catch (error) {
-    console.error('❌ Failed to initialize PostgreSQL Pool:', error);
+  } catch (error: any) {
+    console.error('❌ Failed to initialize PostgreSQL Pool:', error.message);
     return null;
   }
 }
@@ -41,9 +50,15 @@ function getDbPool(): Pool | null {
 // Check database table and create if needed
 async function initializeDb() {
   const p = getDbPool();
-  if (!p) return;
+  if (!p) {
+    isDbHealthy = false;
+    return;
+  }
 
   try {
+    // Perform simple query to verify connection
+    await p.query('SELECT 1');
+    
     await p.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -61,9 +76,11 @@ async function initializeDb() {
         registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    isDbHealthy = true;
     console.log('✅ PostgreSQL database and "users" table checked successfully.');
-  } catch (err) {
-    console.error('❌ Error during PostgreSQL initialization:', err);
+  } catch (err: any) {
+    console.error('❌ Error during PostgreSQL initialization:', err.message);
+    isDbHealthy = false;
   }
 }
 
@@ -76,13 +93,48 @@ async function startServer() {
   // Initialize DB tables
   await initializeDb();
 
-  // API 1: Health check & configuration status
-  app.get('/api/status', (req, res) => {
-    const dbConnected = !!process.env.DATABASE_URL;
+  // API 1: Health check & configuration status (with dynamic ping test)
+  app.get('/api/status', async (req, res) => {
+    const dbUrl = process.env.DATABASE_URL;
+    const dbConfigured = !!dbUrl && !dbUrl.includes('user:password@host/dbname');
+    
+    let actualConnection = false;
+    let errorMessage = null;
+
+    if (dbConfigured) {
+      const p = getDbPool();
+      if (p) {
+        try {
+          // Verify actual client connection
+          const client = await p.connect();
+          try {
+            await client.query('SELECT 1');
+            actualConnection = true;
+            isDbHealthy = true;
+          } finally {
+            client.release();
+          }
+        } catch (err: any) {
+          console.error('⚠️ Live database connection check failed:', err.message);
+          actualConnection = false;
+          isDbHealthy = false;
+          errorMessage = err.message;
+        }
+      }
+    } else {
+      isDbHealthy = false;
+    }
+
     res.json({
       status: 'ok',
-      databaseConnected: dbConnected,
-      mode: dbConnected ? 'production (Neon DB)' : 'sandbox (Local In-Memory Mode)'
+      databaseConfigured: dbConfigured,
+      databaseConnected: actualConnection,
+      errorMessage: errorMessage,
+      mode: actualConnection 
+        ? 'production (Neon/Vercel DB)' 
+        : (dbConfigured 
+            ? '연결 실패 (설정 오류)' 
+            : 'sandbox (Local In-Memory Mode)')
     });
   });
 
@@ -172,7 +224,9 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Registration database error:', err);
-       res.status(500).json({ error: '회원가입 처리 중 서버 오류가 발생했습니다: ' + err.message });
+      res.status(500).json({ 
+        error: `데이터베이스(PostgreSQL) 연결 실패! 설정된 DATABASE_URL의 주소, 비밀번호, 또는 SSL 옵션에 오류가 없는지 검토해 주세요. (상세 오류: ${err.message})`
+      });
     }
   });
 
@@ -249,7 +303,9 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Login database error:', err);
-       res.status(500).json({ error: '로그인 처리 중 서버 오류가 발생했습니다: ' + err.message });
+      res.status(500).json({ 
+        error: `데이터베이스(PostgreSQL) 연결 실패! 설정된 DATABASE_URL의 주소, 비밀번호, 또는 SSL 옵션에 오류가 없는지 검토해 주세요. (상세 오류: ${err.message})`
+      });
     }
   });
 
