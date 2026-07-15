@@ -1,0 +1,6 @@
+{
+  "name": "Point Accumulator",
+  "description": "아이디와 비밀번호로 로그인하여 흥미진진한 미니게임과 업그레이드를 통해 포인트를 쌓고 랭킹을 겨루는 게임입니다.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
