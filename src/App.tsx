@@ -78,74 +78,64 @@ export default function App() {
     }
   }, []);
 
-  // Sync users in localStorage on actions
-  const saveUserDataToStorage = (updatedUser: User) => {
-    setUserData(updatedUser);
-    const usersStr = localStorage.getItem('point_accumulator_users');
-    if (usersStr) {
-      const users = JSON.parse(usersStr);
-      users[updatedUser.username] = {
-        ...users[updatedUser.username],
-        points: updatedUser.points,
-        totalEarned: updatedUser.totalEarned,
-        clickPower: updatedUser.clickPower,
-        passiveIncome: updatedUser.passiveIncome,
-        level: updatedUser.level,
-        experience: updatedUser.experience,
-        clicksCount: updatedUser.clicksCount
-      };
-      localStorage.setItem('point_accumulator_users', JSON.stringify(users));
+  // Sync user data to backend database (and local storage as a robust fallback)
+  const syncUserData = async (
+    user: User,
+    currentUpgrades: Upgrade[] = upgrades,
+    currentTx: Transaction[] = transactions
+  ) => {
+    setUserData(user);
+    
+    // Save to local cache first
+    localStorage.setItem(`point_accumulator_cache_${user.username}`, JSON.stringify({
+      user,
+      upgrades: currentUpgrades,
+      transactions: currentTx
+    }));
+
+    try {
+      await fetch('/api/user/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: user.username,
+          points: user.points,
+          totalEarned: user.totalEarned,
+          clickPower: user.clickPower,
+          passiveIncome: user.passiveIncome,
+          level: user.level,
+          experience: user.experience,
+          clicksCount: user.clicksCount,
+          upgrades: currentUpgrades,
+          transactions: currentTx
+        })
+      });
+    } catch (err) {
+      console.warn('Network error syncing to database:', err);
     }
   };
 
-  // Log in user
-  const handleLoginSuccess = (username: string) => {
-    const usersStr = localStorage.getItem('point_accumulator_users');
-    if (usersStr) {
-      const users = JSON.parse(usersStr);
-      const userRecord = users[username];
+  // Log in user successfully from backend details
+  const handleLoginSuccess = (userDataFromApi: any) => {
+    const username = userDataFromApi.username;
+    setCurrentUser(username);
 
-      const loggedInUser: User = {
-        id: username,
-        username: username,
-        points: userRecord.points || 0,
-        totalEarned: userRecord.totalEarned || 0,
-        clickPower: userRecord.clickPower || 1,
-        passiveIncome: userRecord.passiveIncome || 0,
-        level: userRecord.level || 1,
-        experience: userRecord.experience || 0,
-        clicksCount: userRecord.clicksCount || 0,
-        registeredAt: userRecord.registeredAt || new Date().toISOString()
-      };
+    const loggedInUser: User = {
+      id: username,
+      username: username,
+      points: userDataFromApi.points || 0,
+      totalEarned: userDataFromApi.totalEarned || 0,
+      clickPower: userDataFromApi.clickPower || 1,
+      passiveIncome: userDataFromApi.passiveIncome || 0,
+      level: userDataFromApi.level || 1,
+      experience: userDataFromApi.experience || 0,
+      clicksCount: userDataFromApi.clicksCount || 0,
+      registeredAt: new Date().toISOString()
+    };
 
-      setCurrentUser(username);
-      setUserData(loggedInUser);
-
-      // Load user-specific upgrades or fallback
-      const savedUpgradesStr = localStorage.getItem(`point_accumulator_upgrades_${username}`);
-      if (savedUpgradesStr) {
-        setUpgrades(JSON.parse(savedUpgradesStr));
-      } else {
-        setUpgrades(DEFAULT_UPGRADES);
-        localStorage.setItem(`point_accumulator_upgrades_${username}`, JSON.stringify(DEFAULT_UPGRADES));
-      }
-
-      // Load user-specific transactions
-      const savedTxStr = localStorage.getItem(`point_accumulator_tx_${username}`);
-      if (savedTxStr) {
-        setTransactions(JSON.parse(savedTxStr));
-      } else {
-        const welcomeTx: Transaction = {
-          id: 'welcome_' + Date.now(),
-          type: 'earn',
-          amount: 100,
-          description: '신규 가입 웰컴 포인트 보너스!',
-          timestamp: new Date().toISOString()
-        };
-        setTransactions([welcomeTx]);
-        localStorage.setItem(`point_accumulator_tx_${username}`, JSON.stringify([welcomeTx]));
-      }
-    }
+    setUserData(loggedInUser);
+    setUpgrades(userDataFromApi.upgrades && userDataFromApi.upgrades.length > 0 ? userDataFromApi.upgrades : DEFAULT_UPGRADES);
+    setTransactions(userDataFromApi.transactions || []);
   };
 
   // Sign out
@@ -157,21 +147,20 @@ export default function App() {
   };
 
   // Level Up check and handle
-  const addExpAndCheckLevelUp = (user: User, expToAdd: number): User => {
+  const addExpAndCheckLevelUp = (user: User, expToAdd: number, currentTx: Transaction[]): { user: User, tx: Transaction[] } => {
     let exp = user.experience + expToAdd;
     let level = user.level;
     let points = user.points;
     let levelUpOccurred = false;
+    let updatedTx = [...currentTx];
 
     while (exp >= level * 100) {
       exp -= level * 100;
       level += 1;
-      // Bonus reward for level up
       const bonusPoints = level * 150;
       points += bonusPoints;
       levelUpOccurred = true;
 
-      // Log transaction
       const levelUpTx: Transaction = {
         id: 'levelup_' + Date.now() + '_' + level,
         type: 'earn',
@@ -179,11 +168,7 @@ export default function App() {
         description: `레벨 ${level} 달성 보너스! 🎉`,
         timestamp: new Date().toISOString()
       };
-      setTransactions((prev) => {
-        const updated = [levelUpTx, ...prev];
-        localStorage.setItem(`point_accumulator_tx_${user.username}`, JSON.stringify(updated));
-        return updated;
-      });
+      updatedTx = [levelUpTx, ...updatedTx];
     }
 
     if (levelUpOccurred) {
@@ -192,10 +177,13 @@ export default function App() {
     }
 
     return {
-      ...user,
-      level,
-      experience: exp,
-      points
+      user: {
+        ...user,
+        level,
+        experience: exp,
+        points
+      },
+      tx: updatedTx
     };
   };
 
@@ -203,34 +191,34 @@ export default function App() {
   const handleEarnPoints = (pointsAmount: number, expAmount: number) => {
     if (!userData) return;
 
-    let updatedUser = {
+    const baseUser = {
       ...userData,
       points: userData.points + pointsAmount,
       totalEarned: userData.totalEarned + pointsAmount,
       clicksCount: userData.clicksCount + 1
     };
 
-    updatedUser = addExpAndCheckLevelUp(updatedUser, expAmount);
-    saveUserDataToStorage(updatedUser);
+    const { user: updatedUser, tx: updatedTx } = addExpAndCheckLevelUp(baseUser, expAmount, transactions);
 
-    // Dynamic leaderboard update (small chance of competitor points update)
+    setTransactions(updatedTx);
+    syncUserData(updatedUser, upgrades, updatedTx);
+
     if (Math.random() < 0.25) {
       simulateCompetitorsProgress();
     }
   };
 
-  // Handle Mini-Game results (stake can be negative for losses, positive for net gains)
+  // Handle Mini-Game results
   const handleGameResult = (netPoints: number, expGained: number, description: string, isWin: boolean) => {
     if (!userData) return;
 
-    let updatedUser = {
+    const baseUser = {
       ...userData,
       points: Math.max(0, userData.points + netPoints),
       totalEarned: netPoints > 0 ? userData.totalEarned + netPoints : userData.totalEarned
     };
 
-    // Add transaction log
-    const newTx: Transaction = {
+    const gameTx: Transaction = {
       id: 'game_' + Date.now(),
       type: netPoints >= 0 ? 'earn' : 'spend',
       amount: Math.abs(netPoints),
@@ -238,16 +226,12 @@ export default function App() {
       timestamp: new Date().toISOString()
     };
 
-    setTransactions((prev) => {
-      const updated = [newTx, ...prev];
-      localStorage.setItem(`point_accumulator_tx_${userData.username}`, JSON.stringify(updated));
-      return updated;
-    });
+    const combinedTx = [gameTx, ...transactions];
+    const { user: updatedUser, tx: updatedTx } = addExpAndCheckLevelUp(baseUser, expGained, combinedTx);
 
-    updatedUser = addExpAndCheckLevelUp(updatedUser, expGained);
-    saveUserDataToStorage(updatedUser);
+    setTransactions(updatedTx);
+    syncUserData(updatedUser, upgrades, updatedTx);
 
-    // Simulate competition progress
     simulateCompetitorsProgress();
   };
 
@@ -264,22 +248,17 @@ export default function App() {
       return;
     }
 
-    // Spend points and calculate stats updates
     const updatedPoints = userData.points - upgrade.cost;
     const updatedCount = upgrade.count + 1;
     const nextCost = Math.round(upgrade.cost * (upgrade.type === 'click' ? 1.5 : 1.6));
 
-    // Update upgrade entry
     const updatedUpgrades = [...upgrades];
     updatedUpgrades[upgradeIndex] = {
       ...upgrade,
       count: updatedCount,
       cost: nextCost
     };
-    setUpgrades(updatedUpgrades);
-    localStorage.setItem(`point_accumulator_upgrades_${userData.username}`, JSON.stringify(updatedUpgrades));
 
-    // Re-calculate user global stats
     let extraClickPower = 0;
     let extraPassiveIncome = 0;
 
@@ -298,7 +277,6 @@ export default function App() {
       passiveIncome: extraPassiveIncome
     };
 
-    // Add Spend log
     const upgradeTx: Transaction = {
       id: 'upgrade_' + Date.now(),
       type: 'spend',
@@ -307,13 +285,11 @@ export default function App() {
       timestamp: new Date().toISOString()
     };
 
-    setTransactions((prev) => {
-      const updated = [upgradeTx, ...prev];
-      localStorage.setItem(`point_accumulator_tx_${userData.username}`, JSON.stringify(updated));
-      return updated;
-    });
+    const updatedTx = [upgradeTx, ...transactions];
 
-    saveUserDataToStorage(updatedUser);
+    setUpgrades(updatedUpgrades);
+    setTransactions(updatedTx);
+    syncUserData(updatedUser, updatedUpgrades, updatedTx);
   };
 
   // Passive points generation ticker
@@ -324,30 +300,37 @@ export default function App() {
       setUserData((prevUser) => {
         if (!prevUser) return null;
 
-        // Earn points passive + standard small exp
         const addedPoints = prevUser.passiveIncome;
         const addedExp = Math.max(1, Math.floor(addedPoints * 0.1));
 
-        let updatedUser = {
+        const baseUser = {
           ...prevUser,
           points: prevUser.points + addedPoints,
           totalEarned: prevUser.totalEarned + addedPoints
         };
 
-        updatedUser = addExpAndCheckLevelUp(updatedUser, addedExp);
+        const { user: updatedUser, tx: updatedTx } = addExpAndCheckLevelUp(baseUser, addedExp, transactions);
 
-        // Sync to storage
-        const usersStr = localStorage.getItem('point_accumulator_users');
-        if (usersStr) {
-          const users = JSON.parse(usersStr);
-          users[prevUser.username] = {
-            ...users[prevUser.username],
+        // Background Sync to Server
+        fetch('/api/user/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: updatedUser.username,
             points: updatedUser.points,
             totalEarned: updatedUser.totalEarned,
+            clickPower: updatedUser.clickPower,
+            passiveIncome: updatedUser.passiveIncome,
             level: updatedUser.level,
-            experience: updatedUser.experience
-          };
-          localStorage.setItem('point_accumulator_users', JSON.stringify(users));
+            experience: updatedUser.experience,
+            clicksCount: updatedUser.clicksCount,
+            upgrades: upgrades,
+            transactions: updatedTx
+          })
+        }).catch(() => {});
+
+        if (updatedTx.length !== transactions.length) {
+          setTransactions(updatedTx);
         }
 
         return updatedUser;
@@ -355,20 +338,18 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(passiveInterval);
-  }, [currentUser, userData?.passiveIncome]);
+  }, [currentUser, userData?.passiveIncome, upgrades, transactions]);
 
-  // Simulate active progress of computer competitors to make the game dynamic
+  // Simulate active progress of computer competitors
   const simulateCompetitorsProgress = () => {
     const botsStr = localStorage.getItem('point_accumulator_bots');
     if (!botsStr) return;
 
     const bots = JSON.parse(botsStr);
     const updatedBots = bots.map((bot: any) => {
-      // 35% chance a bot gets some points on each simulated wave
       if (Math.random() < 0.35) {
         const addedPoints = Math.floor(Math.random() * (bot.level * 15)) + 5;
         const newPoints = bot.points + addedPoints;
-        // check level upgrade simulation
         const currentLevel = bot.level;
         const nextLevelPoints = currentLevel * 800;
         const newLevel = newPoints >= nextLevelPoints ? currentLevel + 1 : currentLevel;
@@ -397,31 +378,35 @@ export default function App() {
     return () => clearInterval(botTicker);
   }, [currentUser]);
 
-  // Assemble real registered users & simulated bots into single rankings array
-  const assembleLeaderboard = (activeBots?: any[]) => {
-    const usersStr = localStorage.getItem('point_accumulator_users');
-    const registeredUsers = usersStr ? JSON.parse(usersStr) : {};
-
+  // Assemble real database users and simulated bots into rankings
+  const assembleLeaderboard = async (activeBots?: any[]) => {
     const list: LeaderboardEntry[] = [];
 
-    // Add real registered users
-    Object.keys(registeredUsers).forEach((key) => {
-      const u = registeredUsers[key];
-      list.push({
-        username: u.username,
-        points: u.points || 0,
-        level: u.level || 1,
-        isCurrentUser: u.username === currentUser
-      });
-    });
+    // Fetch real users from backend API
+    try {
+      const res = await fetch('/api/leaderboard');
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.users)) {
+        data.users.forEach((u: any) => {
+          list.push({
+            username: u.username,
+            points: u.points || 0,
+            level: u.level || 1,
+            isCurrentUser: u.username === currentUser
+          });
+        });
+      }
+    } catch (err) {
+      console.warn('Error fetching leaderboard, falling back:', err);
+    }
 
     // Add bots
     const botsToUse = activeBots || JSON.parse(localStorage.getItem('point_accumulator_bots') || '[]');
     botsToUse.forEach((bot: any) => {
-      // Avoid duplicate bots with user names just in case
-      if (!registeredUsers[bot.username]) {
+      const botLabel = bot.username + ' (BOT)';
+      if (!list.some((item) => item.username === bot.username || item.username === botLabel)) {
         list.push({
-          username: bot.username + ' (BOT)',
+          username: botLabel,
           points: bot.points,
           level: bot.level
         });

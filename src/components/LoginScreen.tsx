@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { User, Lock, UserPlus, LogIn, Sparkles } from 'lucide-react';
+import { User, Lock, UserPlus, LogIn, Sparkles, Database, ShieldCheck, HelpCircle } from 'lucide-react';
 
 interface LoginScreenProps {
-  onLoginSuccess: (username: string) => void;
+  onLoginSuccess: (userData: any) => void;
 }
 
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
@@ -13,8 +13,27 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [serverStatus, setServerStatus] = useState<{
+    databaseConnected: boolean;
+    mode: string;
+  } | null>(null);
 
-  const handleLogin = (e: React.FormEvent) => {
+  useEffect(() => {
+    fetch('/api/status')
+      .then((res) => res.json())
+      .then((data) => {
+        setServerStatus({
+          databaseConnected: data.databaseConnected,
+          mode: data.mode
+        });
+      })
+      .catch((err) => {
+        console.error('Error fetching server status:', err);
+      });
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
@@ -24,27 +43,40 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       return;
     }
 
+    setLoading(true);
     const trimmedUsername = username.trim();
-    const usersStr = localStorage.getItem('point_accumulator_users');
-    const users = usersStr ? JSON.parse(usersStr) : {};
 
-    if (!users[trimmedUsername]) {
-      setError('존재하지 않는 아이디입니다. 회원가입을 먼저 진행해주세요.');
-      return;
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          username: trimmedUsername,
+          password: password
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error || '로그인 중 오류가 발생했습니다.');
+        setLoading(false);
+        return;
+      }
+
+      setSuccess('로그인 성공! 게임 데이터를 불러오는 중입니다...');
+      setTimeout(() => {
+        onLoginSuccess(data.user);
+      }, 1000);
+    } catch (err) {
+      setError('서버에 연결할 수 없습니다. 백엔드 서비스 상태를 확인해 주세요.');
+      setLoading(false);
     }
-
-    if (users[trimmedUsername].password !== password) {
-      setError('비밀번호가 일치하지 않습니다.');
-      return;
-    }
-
-    setSuccess('로그인 성공! 게임에 접속 중입니다...');
-    setTimeout(() => {
-      onLoginSuccess(trimmedUsername);
-    }, 1000);
   };
 
-  const handleSignUp = (e: React.FormEvent) => {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
@@ -69,34 +101,38 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       return;
     }
 
+    setLoading(true);
     const trimmedUsername = username.trim();
-    const usersStr = localStorage.getItem('point_accumulator_users');
-    const users = usersStr ? JSON.parse(usersStr) : {};
 
-    if (users[trimmedUsername]) {
-      setError('이미 존재하는 아이디입니다.');
-      return;
+    try {
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          username: trimmedUsername,
+          password: password
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error || '회원가입 중 오류가 발생했습니다.');
+        setLoading(false);
+        return;
+      }
+
+      setSuccess('회원가입이 완료되었습니다! 로그인 탭에서 로그인을 진행해 주세요.');
+      setIsLoginTab(true);
+      setPassword('');
+      setConfirmPassword('');
+      setLoading(false);
+    } catch (err) {
+      setError('서버에 연결할 수 없습니다. 백엔드 서비스 상태를 확인해 주세요.');
+      setLoading(false);
     }
-
-    // Save user data
-    users[trimmedUsername] = {
-      username: trimmedUsername,
-      password: password,
-      points: 100, // starting points bonus!
-      totalEarned: 100,
-      clickPower: 1,
-      passiveIncome: 0,
-      level: 1,
-      experience: 0,
-      clicksCount: 0,
-      registeredAt: new Date().toISOString()
-    };
-
-    localStorage.setItem('point_accumulator_users', JSON.stringify(users));
-    setSuccess('회원가입이 완료되었습니다! 로그인 탭에서 로그인해주세요.');
-    setIsLoginTab(true);
-    setPassword('');
-    setConfirmPassword('');
   };
 
   return (
@@ -132,6 +168,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               setError('');
               setSuccess('');
             }}
+            disabled={loading}
             className={`flex-1 py-4 text-center font-medium text-sm transition-all relative ${
               isLoginTab ? 'text-indigo-600 bg-white font-semibold' : 'text-slate-500 hover:text-slate-800'
             }`}
@@ -154,6 +191,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               setError('');
               setSuccess('');
             }}
+            disabled={loading}
             className={`flex-1 py-4 text-center font-medium text-sm transition-all relative ${
               !isLoginTab ? 'text-indigo-600 bg-white font-semibold' : 'text-slate-500 hover:text-slate-800'
             }`}
@@ -209,6 +247,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                     placeholder="아이디를 입력하세요"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
+                    disabled={loading}
                     className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition text-sm text-slate-800 font-sans"
                     required
                   />
@@ -229,6 +268,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                     placeholder="비밀번호를 입력하세요"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    disabled={loading}
                     className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition text-sm text-slate-800 font-sans"
                     required
                   />
@@ -238,9 +278,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               <button
                 id="btn_login_submit"
                 type="submit"
-                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white rounded-lg font-semibold text-sm shadow-md shadow-indigo-100 hover:shadow-lg transition cursor-pointer"
+                disabled={loading}
+                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] disabled:bg-slate-400 disabled:cursor-not-allowed text-white rounded-lg font-semibold text-sm shadow-md shadow-indigo-100 hover:shadow-lg transition cursor-pointer"
               >
-                게임 접속하기
+                {loading ? '인증 확인 중...' : '게임 접속하기'}
               </button>
             </form>
           ) : (
@@ -259,6 +300,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                     placeholder="새 아이디 입력"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
+                    disabled={loading}
                     className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition text-sm text-slate-800 font-sans"
                     required
                   />
@@ -279,6 +321,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                     placeholder="비밀번호 입력"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    disabled={loading}
                     className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition text-sm text-slate-800 font-sans"
                     required
                   />
@@ -299,6 +342,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                     placeholder="비밀번호 다시 입력"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
+                    disabled={loading}
                     className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition text-sm text-slate-800 font-sans"
                     required
                   />
@@ -312,12 +356,22 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               <button
                 id="btn_register_submit"
                 type="submit"
-                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white rounded-lg font-semibold text-sm shadow-md shadow-indigo-100 hover:shadow-lg transition cursor-pointer"
+                disabled={loading}
+                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] disabled:bg-slate-400 disabled:cursor-not-allowed text-white rounded-lg font-semibold text-sm shadow-md shadow-indigo-100 hover:shadow-lg transition cursor-pointer"
               >
-                계정 생성 및 준비
+                {loading ? '계정 생성 중...' : '계정 생성 및 준비'}
               </button>
             </form>
           )}
+
+          {/* Connection Status Badge */}
+          <div className="mt-6 pt-5 border-t border-slate-100 flex items-center justify-center gap-1.5 text-[11px] text-slate-400 font-sans">
+            <Database className={`w-3.5 h-3.5 ${serverStatus?.databaseConnected ? 'text-emerald-500' : 'text-amber-500 animate-pulse'}`} />
+            <span>서버 연동:</span>
+            <span className={`font-semibold ${serverStatus?.databaseConnected ? 'text-emerald-600' : 'text-amber-600'}`}>
+              {serverStatus ? serverStatus.mode : '서버 상태 로딩 중...'}
+            </span>
+          </div>
         </div>
       </motion.div>
     </div>
